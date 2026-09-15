@@ -107,6 +107,76 @@ const register = async ({ firstName, lastName, email, phone, password }) => {
   }
 };
 
+// const verifyEmailOtp = async ({ userId, otp }) => {
+//   const client = await pool.connect();
+
+//   try {
+//     await client.query("BEGIN");
+
+//     const otpRecord = await authRepository.findLatestValidOtp(
+//       client,
+//       userId,
+//       "EMAIL",
+//       "REGISTRATION",
+//     );
+
+//     if (!otpRecord) {
+//       const error = new Error("OTP not found or already verified");
+
+//       error.statusCode = 400;
+
+//       throw error;
+//     }
+
+//     // OTP expiry check
+//     if (new Date(otpRecord.expires_at) <= new Date()) {
+//       const error = new Error("OTP has expired");
+
+//       error.statusCode = 400;
+
+//       throw error;
+//     }
+
+//     // Maximum attempts
+//     if (otpRecord.attempts >= 5) {
+//       const error = new Error("Maximum OTP attempts exceeded");
+
+//       error.statusCode = 429;
+
+//       throw error;
+//     }
+
+//     // Compare entered OTP with hashed OTP
+//     const isValidOtp = await bcrypt.compare(otp, otpRecord.otp_hash);
+
+//     if (!isValidOtp) {
+//       await authRepository.incrementOtpAttempts(client, otpRecord.id);
+
+//       const error = new Error("Invalid OTP");
+
+//       error.statusCode = 400;
+
+//       throw error;
+//     }
+
+//     // Mark OTP as verified
+//     await authRepository.markOtpVerified(client, otpRecord.id);
+
+//     // Mark email as verified
+//     const user = await authRepository.markEmailVerified(client, userId);
+
+//     await client.query("COMMIT");
+
+//     return user;
+//   } catch (error) {
+//     await client.query("ROLLBACK");
+
+//     throw error;
+//   } finally {
+//     client.release();
+//   }
+// };
+
 const verifyEmailOtp = async ({ userId, otp }) => {
   const client = await pool.connect();
 
@@ -124,33 +194,29 @@ const verifyEmailOtp = async ({ userId, otp }) => {
       const error = new Error("OTP not found or already verified");
 
       error.statusCode = 400;
-
       throw error;
     }
 
-    // OTP expiry check
     if (new Date(otpRecord.expires_at) <= new Date()) {
       const error = new Error("OTP has expired");
 
       error.statusCode = 400;
-
       throw error;
     }
 
-    // Maximum attempts
     if (otpRecord.attempts >= 5) {
       const error = new Error("Maximum OTP attempts exceeded");
 
       error.statusCode = 429;
-
       throw error;
     }
 
-    // Compare entered OTP with hashed OTP
     const isValidOtp = await bcrypt.compare(otp, otpRecord.otp_hash);
 
     if (!isValidOtp) {
       await authRepository.incrementOtpAttempts(client, otpRecord.id);
+
+      await client.query("COMMIT");
 
       const error = new Error("Invalid OTP");
 
@@ -159,23 +225,97 @@ const verifyEmailOtp = async ({ userId, otp }) => {
       throw error;
     }
 
-    // Mark OTP as verified
     await authRepository.markOtpVerified(client, otpRecord.id);
 
-    // Mark email as verified
     const user = await authRepository.markEmailVerified(client, userId);
 
     await client.query("COMMIT");
 
     return user;
   } catch (error) {
-    await client.query("ROLLBACK");
+    // Only rollback if transaction is still active
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      // Transaction may already have been committed
+    }
 
     throw error;
   } finally {
     client.release();
   }
 };
+
+// const verifyPhoneOtp = async ({ userId, otp }) => {
+//   const client = await pool.connect();
+
+//   try {
+//     await client.query("BEGIN");
+
+//     const otpRecord = await authRepository.findLatestValidOtp(
+//       client,
+//       userId,
+//       "PHONE",
+//       "REGISTRATION",
+//     );
+
+//     if (!otpRecord) {
+//       const error = new Error("OTP not found or already verified");
+
+//       error.statusCode = 400;
+//       throw error;
+//     }
+
+//     // Check expiry
+//     if (new Date(otpRecord.expires_at) <= new Date()) {
+//       const error = new Error("OTP has expired");
+
+//       error.statusCode = 400;
+//       throw error;
+//     }
+
+//     // Check attempts
+//     if (otpRecord.attempts >= 5) {
+//       const error = new Error("Maximum OTP attempts exceeded");
+
+//       error.statusCode = 429;
+//       throw error;
+//     }
+
+//     // Compare OTP
+//     const isValidOtp = await bcrypt.compare(otp, otpRecord.otp_hash);
+
+//     if (!isValidOtp) {
+//       await authRepository.incrementOtpAttempts(client, otpRecord.id);
+
+//       const error = new Error("Invalid OTP");
+
+//       error.statusCode = 400;
+//       throw error;
+//     }
+
+//     // Mark OTP verified
+//     await authRepository.markOtpVerified(client, otpRecord.id);
+
+//     // Mark phone verified
+//     await authRepository.markPhoneVerified(client, userId);
+
+//     // Activate only if BOTH verified
+//     const user = await authRepository.activateUserIfFullyVerified(
+//       client,
+//       userId,
+//     );
+
+//     await client.query("COMMIT");
+
+//     return user;
+//   } catch (error) {
+//     await client.query("ROLLBACK");
+//     throw error;
+//   } finally {
+//     client.release();
+//   }
+// };
 
 const verifyPhoneOtp = async ({ userId, otp }) => {
   const client = await pool.connect();
@@ -219,9 +359,12 @@ const verifyPhoneOtp = async ({ userId, otp }) => {
     if (!isValidOtp) {
       await authRepository.incrementOtpAttempts(client, otpRecord.id);
 
+      await client.query("COMMIT");
+
       const error = new Error("Invalid OTP");
 
       error.statusCode = 400;
+
       throw error;
     }
 
@@ -251,5 +394,5 @@ const verifyPhoneOtp = async ({ userId, otp }) => {
 module.exports = {
   register,
   verifyEmailOtp,
-  verifyPhoneOtp
+  verifyPhoneOtp,
 };
