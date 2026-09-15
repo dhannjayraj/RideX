@@ -5,6 +5,8 @@ const authRepository = require("../repositories/auth.repository");
 
 const { generateOtp } = require("../utils/otp");
 
+const {sendWelcomeOtpEmail, sendResendOtpEmail } = require("./email.service");
+
 const register = async ({ firstName, lastName, email, phone, password }) => {
   const client = await pool.connect();
 
@@ -89,8 +91,13 @@ const register = async ({ firstName, lastName, email, phone, password }) => {
     // Commit transaction
     await client.query("COMMIT");
 
-    // Development only
-    console.log("Email OTP:", emailOtp);
+    // Send email after DB transaction
+    await sendWelcomeOtpEmail({
+      to: email,
+      otp: emailOtp,
+      purpose: "REGISTRATION",
+    });
+
     console.log("Phone OTP:", phoneOtp);
 
     return {
@@ -529,8 +536,16 @@ const resendOtp = async ({ userId, channel }) => {
 
     await client.query("COMMIT");
 
-    // Development only
-    console.log(`${channel} RESEND OTP:`, otp);
+    if (channel === "EMAIL") {
+      await sendResendOtpEmail({
+        to: user.email,
+        otp,
+        purpose: "REGISTRATION",
+      });
+    } else {
+      // SMS only console
+      console.log("PHONE OTP:", otp);
+    }
 
     return {
       message: "OTP resent successfully",
@@ -550,5 +565,5 @@ module.exports = {
   register,
   verifyEmailOtp,
   verifyPhoneOtp,
-  resendOtp
+  resendOtp,
 };
