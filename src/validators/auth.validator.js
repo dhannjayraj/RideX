@@ -98,8 +98,37 @@ const validatePhoneOtp = (req, res, next) => {
   next();
 };
 
+const validateResendOtp = (req, res, next) => {
+  const { userId, channel } = req.body;
+
+  const errors = [];
+
+  if (!userId) {
+    errors.push("User ID is required");
+  }
+
+  if (!channel) {
+    errors.push("Channel is required");
+  }
+
+  if (channel && !["EMAIL", "PHONE"].includes(channel)) {
+    errors.push("Channel must be EMAIL or PHONE");
+  }
+
+  if (errors.length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Validation failed",
+      errors,
+    });
+  }
+
+  next();
+};
+
 module.exports = {
   validateRegister,
   validateEmailOtp,
-  validatePhoneOtp
+  validatePhoneOtp,
+  validateResendOtp
 };

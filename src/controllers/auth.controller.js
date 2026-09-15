@@ -58,8 +58,27 @@ const verifyPhoneOtp = async (req, res, next) => {
   }
 };
 
+const resendOtp = async (req, res, next) => {
+  try {
+    const { userId, channel } = req.body;
+
+    const result = await authService.resendOtp({
+      userId,
+      channel,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: result.message,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   register,
   verifyEmailOtp,
-  verifyPhoneOtp
+  verifyPhoneOtp,
+  resendOtp
 };

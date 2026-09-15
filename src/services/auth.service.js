@@ -213,13 +213,24 @@ const verifyEmailOtp = async ({ userId, otp }) => {
 
     const isValidOtp = await bcrypt.compare(otp, otpRecord.otp_hash);
 
+    // if (!isValidOtp) {
+    //   await authRepository.incrementOtpAttempts(client, otpRecord.id);
+
+    //   await client.query("COMMIT");
+
+    //   const error = new Error("Invalid OTP");
+
+    //   error.statusCode = 400;
+
+    //   throw error;
+    // }
+
     if (!isValidOtp) {
       await authRepository.incrementOtpAttempts(client, otpRecord.id);
 
       await client.query("COMMIT");
 
       const error = new Error("Invalid OTP");
-
       error.statusCode = 400;
 
       throw error;
@@ -356,13 +367,24 @@ const verifyPhoneOtp = async ({ userId, otp }) => {
     // Compare OTP
     const isValidOtp = await bcrypt.compare(otp, otpRecord.otp_hash);
 
+    // if (!isValidOtp) {
+    //   await authRepository.incrementOtpAttempts(client, otpRecord.id);
+
+    //   await client.query("COMMIT");
+
+    //   const error = new Error("Invalid OTP");
+
+    //   error.statusCode = 400;
+
+    //   throw error;
+    // }
+
     if (!isValidOtp) {
       await authRepository.incrementOtpAttempts(client, otpRecord.id);
 
       await client.query("COMMIT");
 
       const error = new Error("Invalid OTP");
-
       error.statusCode = 400;
 
       throw error;
@@ -391,8 +413,142 @@ const verifyPhoneOtp = async ({ userId, otp }) => {
   }
 };
 
+const resendOtp = async ({ userId, channel }) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const purpose = "REGISTRATION";
+
+    if (!["EMAIL", "PHONE"].includes(channel)) {
+      const error = new Error("Invalid OTP channel");
+
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Lock user row
+    const userResult = await client.query(
+      `
+            SELECT
+                id,
+                email,
+                phone,
+                is_email_verified,
+                is_phone_verified,
+                status
+            FROM users
+            WHERE id = $1
+            FOR UPDATE
+            `,
+      [userId],
+    );
+
+    const user = userResult.rows[0];
+
+    if (!user) {
+      const error = new Error("User not found");
+
+      error.statusCode = 404;
+      throw error;
+    }
+
+    // Already verified?
+    if (channel === "EMAIL" && user.is_email_verified) {
+      const error = new Error("Email is already verified");
+
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (channel === "PHONE" && user.is_phone_verified) {
+      const error = new Error("Phone is already verified");
+
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // 60 second cooldown
+    const secondsSinceLastOtp = await authRepository.getSecondsSinceLastOtp(
+      client,
+      userId,
+      channel,
+      purpose,
+    );
+
+    if (secondsSinceLastOtp !== null && secondsSinceLastOtp < 60) {
+      const remainingSeconds = Math.ceil(60 - secondsSinceLastOtp);
+
+      const error = new Error(
+        `Please wait ${remainingSeconds} seconds before requesting another OTP`,
+      );
+
+      error.statusCode = 429;
+      throw error;
+    }
+
+    // Maximum 5 resends per hour
+    const recentResendCount = await authRepository.countRecentResends(
+      client,
+      userId,
+      channel,
+      purpose,
+    );
+
+    if (recentResendCount >= 5) {
+      const error = new Error(
+        "Maximum OTP resend limit exceeded. Please try again later.",
+      );
+
+      error.statusCode = 429;
+      throw error;
+    }
+
+    // Invalidate previous OTP
+    await authRepository.invalidateActiveOtps(client, userId, channel, purpose);
+
+    // Generate new OTP
+    const otp = generateOtp();
+
+    // Hash OTP
+    const otpHash = await bcrypt.hash(otp, 10);
+
+    // 5 minute expiry
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    // Save new OTP
+    await authRepository.createOtpVerification(client, {
+      userId,
+      channel,
+      purpose,
+      otpHash,
+      expiresAt,
+      resendCount: 1,
+    });
+
+    await client.query("COMMIT");
+
+    // Development only
+    console.log(`${channel} RESEND OTP:`, otp);
+
+    return {
+      message: "OTP resent successfully",
+    };
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (_) {}
+
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   register,
   verifyEmailOtp,
   verifyPhoneOtp,
+  resendOtp
 };
