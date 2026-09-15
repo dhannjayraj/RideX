@@ -3,11 +3,16 @@ const bcrypt = require("bcrypt");
 const pool = require("../config/db");
 const authRepository = require("../repositories/auth.repository");
 
+const { generateOtp } = require("../utils/otp");
+
 const register = async ({ firstName, lastName, email, phone, password }) => {
   const client = await pool.connect();
 
   try {
-    // 1. Check existing user
+    // Start transaction
+    await client.query("BEGIN");
+
+    // Check existing user
     const existingUser = await authRepository.findUserByEmailOrPhone(
       client,
       email,
@@ -22,13 +27,10 @@ const register = async ({ firstName, lastName, email, phone, password }) => {
       throw error;
     }
 
-    // 2. Hash password
+    // Hash password
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // 3. Start transaction
-    await client.query("BEGIN");
-
-    // 4. Create user
+    // Create user
     const user = await authRepository.createUser(client, {
       firstName,
       lastName,
@@ -37,7 +39,7 @@ const register = async ({ firstName, lastName, email, phone, password }) => {
       passwordHash,
     });
 
-    // 5. Find CUSTOMER role
+    // Find CUSTOMER role
     const customerRole = await authRepository.findRoleByName(
       client,
       "CUSTOMER",
@@ -51,29 +53,203 @@ const register = async ({ firstName, lastName, email, phone, password }) => {
       throw error;
     }
 
-    // 6. Assign CUSTOMER role
+    // Assign CUSTOMER role
     await authRepository.assignRole(client, user.id, customerRole.id);
 
-    // 7. Commit transaction
+    // Generate OTPs
+    const emailOtp = generateOtp();
+    const phoneOtp = generateOtp();
+
+    // Hash OTPs
+    const emailOtpHash = await bcrypt.hash(emailOtp, 10);
+
+    const phoneOtpHash = await bcrypt.hash(phoneOtp, 10);
+
+    // OTP expiry - 5 minutes
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    // Save email OTP
+    await authRepository.createOtpVerification(client, {
+      userId: user.id,
+      channel: "EMAIL",
+      purpose: "REGISTRATION",
+      otpHash: emailOtpHash,
+      expiresAt,
+    });
+
+    // Save phone OTP
+    await authRepository.createOtpVerification(client, {
+      userId: user.id,
+      channel: "PHONE",
+      purpose: "REGISTRATION",
+      otpHash: phoneOtpHash,
+      expiresAt,
+    });
+
+    // Commit transaction
     await client.query("COMMIT");
 
-    // 8. Return user
-    return user;
+    // Development only
+    console.log("Email OTP:", emailOtp);
+    console.log("Phone OTP:", phoneOtp);
+
+    return {
+      user,
+      verificationRequired: true,
+    };
   } catch (error) {
-    // Rollback only if transaction started
-    try {
-      await client.query("ROLLBACK");
-    } catch (rollbackError) {
-      console.error("Rollback failed:", rollbackError);
-    }
+    // Rollback transaction
+    await client.query("ROLLBACK");
 
     throw error;
   } finally {
-    // Connection pool me wapas
+    client.release();
+  }
+};
+
+const verifyEmailOtp = async ({ userId, otp }) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const otpRecord = await authRepository.findLatestValidOtp(
+      client,
+      userId,
+      "EMAIL",
+      "REGISTRATION",
+    );
+
+    if (!otpRecord) {
+      const error = new Error("OTP not found or already verified");
+
+      error.statusCode = 400;
+
+      throw error;
+    }
+
+    // OTP expiry check
+    if (new Date(otpRecord.expires_at) <= new Date()) {
+      const error = new Error("OTP has expired");
+
+      error.statusCode = 400;
+
+      throw error;
+    }
+
+    // Maximum attempts
+    if (otpRecord.attempts >= 5) {
+      const error = new Error("Maximum OTP attempts exceeded");
+
+      error.statusCode = 429;
+
+      throw error;
+    }
+
+    // Compare entered OTP with hashed OTP
+    const isValidOtp = await bcrypt.compare(otp, otpRecord.otp_hash);
+
+    if (!isValidOtp) {
+      await authRepository.incrementOtpAttempts(client, otpRecord.id);
+
+      const error = new Error("Invalid OTP");
+
+      error.statusCode = 400;
+
+      throw error;
+    }
+
+    // Mark OTP as verified
+    await authRepository.markOtpVerified(client, otpRecord.id);
+
+    // Mark email as verified
+    const user = await authRepository.markEmailVerified(client, userId);
+
+    await client.query("COMMIT");
+
+    return user;
+  } catch (error) {
+    await client.query("ROLLBACK");
+
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const verifyPhoneOtp = async ({ userId, otp }) => {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const otpRecord = await authRepository.findLatestValidOtp(
+      client,
+      userId,
+      "PHONE",
+      "REGISTRATION",
+    );
+
+    if (!otpRecord) {
+      const error = new Error("OTP not found or already verified");
+
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Check expiry
+    if (new Date(otpRecord.expires_at) <= new Date()) {
+      const error = new Error("OTP has expired");
+
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Check attempts
+    if (otpRecord.attempts >= 5) {
+      const error = new Error("Maximum OTP attempts exceeded");
+
+      error.statusCode = 429;
+      throw error;
+    }
+
+    // Compare OTP
+    const isValidOtp = await bcrypt.compare(otp, otpRecord.otp_hash);
+
+    if (!isValidOtp) {
+      await authRepository.incrementOtpAttempts(client, otpRecord.id);
+
+      const error = new Error("Invalid OTP");
+
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // Mark OTP verified
+    await authRepository.markOtpVerified(client, otpRecord.id);
+
+    // Mark phone verified
+    await authRepository.markPhoneVerified(client, userId);
+
+    // Activate only if BOTH verified
+    const user = await authRepository.activateUserIfFullyVerified(
+      client,
+      userId,
+    );
+
+    await client.query("COMMIT");
+
+    return user;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
     client.release();
   }
 };
 
 module.exports = {
   register,
+  verifyEmailOtp,
+  verifyPhoneOtp
 };

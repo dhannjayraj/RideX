@@ -42,6 +42,64 @@ const validateRegister = (req, res, next) => {
   next();
 };
 
+const validateEmailOtp = (req, res, next) => {
+  const { userId, otp } = req.body;
+
+  const errors = [];
+
+  if (!userId) {
+    errors.push("User ID is required");
+  }
+
+  if (!otp) {
+    errors.push("OTP is required");
+  }
+
+  if (otp && !/^[0-9]{6}$/.test(otp)) {
+    errors.push("OTP must be a 6-digit number");
+  }
+
+  if (errors.length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Validation failed",
+      errors,
+    });
+  }
+
+  next();
+};
+
+const validatePhoneOtp = (req, res, next) => {
+  const { userId, otp } = req.body;
+
+  const errors = [];
+
+  if (!userId) {
+    errors.push("User ID is required");
+  }
+
+  if (!otp) {
+    errors.push("OTP is required");
+  }
+
+  if (otp && !/^[0-9]{6}$/.test(otp)) {
+    errors.push("OTP must be a 6-digit number");
+  }
+
+  if (errors.length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Validation failed",
+      errors,
+    });
+  }
+
+  next();
+};
+
 module.exports = {
   validateRegister,
+  validateEmailOtp,
+  validatePhoneOtp
 };
