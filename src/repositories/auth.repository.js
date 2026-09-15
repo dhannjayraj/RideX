@@ -1,9 +1,33 @@
+// const findUserByEmailOrPhone = async (client, email, phone) => {
+//   const result = await client.query(
+//     `
+//         SELECT id
+//         FROM users
+//         WHERE email = $1 OR phone = $2
+//         LIMIT 1
+//         `,
+//     [email, phone],
+//   );
+
+//   return result.rows[0] || null;
+// };
+
 const findUserByEmailOrPhone = async (client, email, phone) => {
   const result = await client.query(
     `
-        SELECT id
+        SELECT
+            id,
+            first_name,
+            last_name,
+            email,
+            phone,
+            password_hash,
+            status,
+            is_email_verified,
+            is_phone_verified
         FROM users
-        WHERE email = $1 OR phone = $2
+        WHERE email = $1
+           OR phone = $2
         LIMIT 1
         `,
     [email, phone],
@@ -97,18 +121,11 @@ const assignRole = async (client, userId, roleId) => {
 // };
 
 const createOtpVerification = async (
-    client,
-    {
-        userId,
-        channel,
-        purpose,
-        otpHash,
-        expiresAt,
-        resendCount = 0
-    }
+  client,
+  { userId, channel, purpose, otpHash, expiresAt, resendCount = 0 },
 ) => {
-    const result = await client.query(
-        `
+  const result = await client.query(
+    `
         INSERT INTO otp_verifications (
             user_id,
             channel,
@@ -126,17 +143,10 @@ const createOtpVerification = async (
             expires_at,
             created_at
         `,
-        [
-            userId,
-            channel,
-            purpose,
-            otpHash,
-            expiresAt,
-            resendCount
-        ]
-    );
+    [userId, channel, purpose, otpHash, expiresAt, resendCount],
+  );
 
-    return result.rows[0];
+  return result.rows[0];
 };
 
 // const findLatestValidOtp = async (client, userId, channel, purpose) => {
@@ -165,14 +175,9 @@ const createOtpVerification = async (
 //   return result.rows[0] || null;
 // };
 
-const findLatestValidOtp = async (
-    client,
-    userId,
-    channel,
-    purpose
-) => {
-    const result = await client.query(
-        `
+const findLatestValidOtp = async (client, userId, channel, purpose) => {
+  const result = await client.query(
+    `
         SELECT
             id,
             user_id,
@@ -193,14 +198,10 @@ const findLatestValidOtp = async (
         ORDER BY created_at DESC
         LIMIT 1
         `,
-        [
-            userId,
-            channel,
-            purpose
-        ]
-    );
+    [userId, channel, purpose],
+  );
 
-    return result.rows[0] || null;
+  return result.rows[0] || null;
 };
 
 const incrementOtpAttempts = async (client, otpId) => {
@@ -293,14 +294,9 @@ const activateUserIfFullyVerified = async (client, userId) => {
   return result.rows[0] || null;
 };
 
-const invalidateActiveOtps = async (
-    client,
-    userId,
-    channel,
-    purpose
-) => {
-    await client.query(
-        `
+const invalidateActiveOtps = async (client, userId, channel, purpose) => {
+  await client.query(
+    `
         UPDATE otp_verifications
         SET invalidated_at = NOW()
         WHERE user_id = $1
@@ -309,23 +305,13 @@ const invalidateActiveOtps = async (
           AND verified_at IS NULL
           AND invalidated_at IS NULL
         `,
-        [
-            userId,
-            channel,
-            purpose
-        ]
-    );
+    [userId, channel, purpose],
+  );
 };
 
-
-const countRecentResends = async (
-    client,
-    userId,
-    channel,
-    purpose
-) => {
-    const result = await client.query(
-        `
+const countRecentResends = async (client, userId, channel, purpose) => {
+  const result = await client.query(
+    `
         SELECT COUNT(*) AS count
         FROM otp_verifications
         WHERE user_id = $1
@@ -334,25 +320,15 @@ const countRecentResends = async (
           AND created_at >= NOW() - INTERVAL '1 hour'
           AND resend_count > 0
         `,
-        [
-            userId,
-            channel,
-            purpose
-        ]
-    );
+    [userId, channel, purpose],
+  );
 
-    return Number(result.rows[0].count);
+  return Number(result.rows[0].count);
 };
 
-
-const getSecondsSinceLastOtp = async (
-    client,
-    userId,
-    channel,
-    purpose
-) => {
-    const result = await client.query(
-        `
+const getSecondsSinceLastOtp = async (client, userId, channel, purpose) => {
+  const result = await client.query(
+    `
         SELECT
             EXTRACT(
                 EPOCH FROM (NOW() - created_at)
@@ -364,20 +340,48 @@ const getSecondsSinceLastOtp = async (
         ORDER BY created_at DESC
         LIMIT 1
         `,
-        [
-            userId,
+    [userId, channel, purpose],
+  );
+
+  if (!result.rows[0]) {
+    return null;
+  }
+
+  return Number(result.rows[0].seconds_since_created);
+};
+
+const updatePendingUserOtp = async (
+  client,
+  { userId, emailOtpHash, phoneOtpHash, expiresAt },
+) => {
+  await client.query(
+    `
+        UPDATE otp_verifications
+        SET invalidated_at = NOW()
+        WHERE user_id = $1
+          AND purpose = 'REGISTRATION'
+          AND verified_at IS NULL
+          AND invalidated_at IS NULL
+        `,
+    [userId],
+  );
+
+  await client.query(
+    `
+        INSERT INTO otp_verifications (
+            user_id,
             channel,
-            purpose
-        ]
-    );
-
-    if (!result.rows[0]) {
-        return null;
-    }
-
-    return Number(
-        result.rows[0].seconds_since_created
-    );
+            purpose,
+            otp_hash,
+            expires_at,
+            resend_count
+        )
+        VALUES
+            ($1, 'EMAIL', 'REGISTRATION', $2, $3, 0),
+            ($1, 'PHONE', 'REGISTRATION', $4, $3, 0)
+        `,
+    [userId, emailOtpHash, expiresAt, phoneOtpHash],
+  );
 };
 
 module.exports = {
@@ -394,5 +398,6 @@ module.exports = {
   activateUserIfFullyVerified,
   invalidateActiveOtps,
   countRecentResends,
-  getSecondsSinceLastOtp
+  getSecondsSinceLastOtp,
+  updatePendingUserOtp
 };
